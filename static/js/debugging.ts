@@ -58,13 +58,14 @@ function hide_if_no_variables(){ //this shows just the button, not the list itse
   if($('#variables #variable-list li').length == 0){
     $('#variable_button').hide();
     $('#variables').hide();
+    $('#variables-expand').hide();
   }
   else{
     $('#variable_button').show();
     if(variable_view){
       $('#variables').show();
+      $('#variables-expand').show();
     }
-    
   }
 }
 
@@ -85,8 +86,12 @@ export function load_variables(variables: any) {
     for (const i in variables) {
       // Only append if the variable contains any data (and is not undefined)
       if (variables[i][1]) {
+<<<<<<< Updated upstream
         const variableName = variables[i][0].replace(/^_/, '');
         variableList.append(`<li style=color:${variables[i][2]}>${variableName}: ${variables[i][1]}</li>`);
+=======
+        variableList.append(`<li>${variables[i][0]}: ${variables[i][1]}</li>`);
+>>>>>>> Stashed changes
       }
     }
     show_variables();
@@ -160,6 +165,7 @@ export function initializeDebugger(options: InitializeDebuggerOptions) {
 
   //Hides the HTML DIV for variables if feature flag is false
   if (!variable_view) {
+    $('#variables-expand').hide();
     $('#variables').hide();
     $('#variable_button').hide();
   }
