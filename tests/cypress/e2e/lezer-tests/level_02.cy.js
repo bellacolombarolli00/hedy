@@ -70,6 +70,17 @@ describe('Lezer parser tets for level 2', () => {
 
             multiLevelTester('Test turtle assignment', code, expectedTree, 2, 5);
         });
+
+        describe('Test assign with SpecialChar', () => {
+            const code = `command is print hello world!`
+            const expectedTree = `
+            Program(
+                Command(
+                    Assign(Text,is,Text,Text,Text,SpecialChar)
+                )
+            )`
+            multiLevelTester('Test assign with SpecialChar', code, expectedTree, 2, 5);
+        });
     });
 
     describe('Error tests level 2', () => {
