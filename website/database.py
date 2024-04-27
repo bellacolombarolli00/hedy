@@ -292,12 +292,12 @@ class Database:
         """
         return PROGRAMS.update({"id": id}, {"public": 1 if public else 0})
 
-    def submit_program_by_id(self, id):
+    def submit_program_by_id(self, id, submit):
         """Switch a program to submitted.
 
         Return the updated program state.
         """
-        return PROGRAMS.update({"id": id}, {"submitted": True, "date": timems()})
+        return PROGRAMS.update({"id": id}, {"submitted": submit, "date": timems()})
 
     def delete_program_by_id(self, id):
         """Delete a program by id."""
@@ -895,11 +895,11 @@ class Database:
         if data:
             PUBLIC_PROFILES.update({"username": username}, {"country": country})
 
-    def set_favourite_program(self, username, program_id):
+    def set_favourite_program(self, username, program_id, set_favourite):
         # We can only set a favourite program is there is already a public profile
         data = PUBLIC_PROFILES.get({"username": username})
         if data:
-            data["favourite_program"] = program_id
+            data["favourite_program"] = program_id if set_favourite else ''
             self.update_public_profile(username, data)
             return True
         return False

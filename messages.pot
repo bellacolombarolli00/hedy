@@ -23,6 +23,9 @@ msgstr ""
 msgid "Cyclic Var Definition"
 msgstr ""
 
+msgid "Else Without If Error"
+msgstr ""
+
 msgid "Function Undefined"
 msgstr ""
 
@@ -53,9 +56,6 @@ msgstr ""
 msgid "Invalid Type Combination"
 msgstr ""
 
-msgid "Locked Language Feature"
-msgstr ""
-
 msgid "Lonely Echo"
 msgstr ""
 
@@ -63,6 +63,9 @@ msgid "Lonely Text"
 msgstr ""
 
 msgid "Missing Additional Command"
+msgstr ""
+
+msgid "Missing Colon Error"
 msgstr ""
 
 msgid "Missing Command"
@@ -92,10 +95,25 @@ msgstr ""
 msgid "Pressit Missing Else"
 msgstr ""
 
+msgid "Runtime Index Error"
+msgstr ""
+
+msgid "Runtime Value Error"
+msgstr ""
+
+msgid "Runtime Values Error"
+msgstr ""
+
 msgid "Save Microbit code "
 msgstr ""
 
 msgid "Too Big"
+msgstr ""
+
+msgid "Too Few Indents"
+msgstr ""
+
+msgid "Too Many Indents"
 msgstr ""
 
 msgid "Unexpected Indentation"
@@ -147,6 +165,9 @@ msgid "achievements_check_icon_alt"
 msgstr ""
 
 msgid "achievements_logo_alt"
+msgstr ""
+
+msgid "actions"
 msgstr ""
 
 msgid "add"
@@ -206,6 +227,9 @@ msgstr ""
 msgid "adventure_updated"
 msgstr ""
 
+msgid "adventures"
+msgstr ""
+
 msgid "adventures_info"
 msgstr ""
 
@@ -257,6 +281,9 @@ msgstr ""
 msgid "ask_needs_var"
 msgstr ""
 
+msgid "available_in"
+msgstr ""
+
 msgid "become_a_sponsor"
 msgstr ""
 
@@ -273,15 +300,6 @@ msgid "cancel"
 msgstr ""
 
 msgid "cant_parse_exception"
-msgstr ""
-
-msgid "catch_index_exception"
-msgstr ""
-
-msgid "catch_multiple_values_exception"
-msgstr ""
-
-msgid "catch_value_exception"
 msgstr ""
 
 msgid "certificate"
@@ -336,6 +354,9 @@ msgid "class_survey_question3"
 msgstr ""
 
 msgid "class_survey_question4"
+msgstr ""
+
+msgid "classes"
 msgstr ""
 
 msgid "classes_info"
@@ -449,6 +470,9 @@ msgstr ""
 msgid "customization_deleted"
 msgstr ""
 
+msgid "customize"
+msgstr ""
+
 msgid "customize_adventure"
 msgstr ""
 
@@ -456,6 +480,9 @@ msgid "customize_class"
 msgstr ""
 
 msgid "dash"
+msgstr ""
+
+msgid "default_401"
 msgstr ""
 
 msgid "default_403"
@@ -501,6 +528,9 @@ msgid "directly_available"
 msgstr ""
 
 msgid "disable"
+msgstr ""
+
+msgid "disable_explore_page"
 msgstr ""
 
 msgid "disable_parsons"
@@ -713,6 +743,9 @@ msgstr ""
 msgid "hedy_choice_title"
 msgstr ""
 
+msgid "hedy_introduction_slides"
+msgstr ""
+
 msgid "hedy_logo_alt"
 msgstr ""
 
@@ -825,6 +858,9 @@ msgid "join_class"
 msgstr ""
 
 msgid "join_prompt"
+msgstr ""
+
+msgid "keybinding_waiting_for_keypress"
 msgstr ""
 
 msgid "keyword_language_invalid"
@@ -974,6 +1010,9 @@ msgstr ""
 msgid "more_options"
 msgstr ""
 
+msgid "multiple_keywords_warning"
+msgstr ""
+
 msgid "my_account"
 msgstr ""
 
@@ -1005,9 +1044,6 @@ msgid "nav_learn_more"
 msgstr ""
 
 msgid "nav_start"
-msgstr ""
-
-msgid "nested blocks"
 msgstr ""
 
 msgid "new_password"
@@ -1283,6 +1319,12 @@ msgstr ""
 msgid "public_adventures"
 msgstr ""
 
+msgid "public_content"
+msgstr ""
+
+msgid "public_content_info"
+msgstr ""
+
 msgid "public_invalid"
 msgstr ""
 
@@ -1293,9 +1335,6 @@ msgid "public_profile_info"
 msgstr ""
 
 msgid "public_profile_updated"
-msgstr ""
-
-msgid "pygame_waiting_for_input"
 msgstr ""
 
 msgid "question mark"
@@ -1403,9 +1442,6 @@ msgstr ""
 msgid "runs_over_time"
 msgstr ""
 
-msgid "save"
-msgstr ""
-
 msgid "save_parse_warning"
 msgstr ""
 
@@ -1490,7 +1526,13 @@ msgstr ""
 msgid "slash"
 msgstr ""
 
+msgid "sleeping"
+msgstr ""
+
 msgid "slides"
+msgstr ""
+
+msgid "slides_for_level"
 msgstr ""
 
 msgid "slides_info"
@@ -1760,6 +1802,12 @@ msgstr ""
 msgid "unauthorized"
 msgstr ""
 
+msgid "unfavourite_confirm"
+msgstr ""
+
+msgid "unfavourite_success"
+msgstr ""
+
 msgid "unique_usernames"
 msgstr ""
 
@@ -1769,10 +1817,16 @@ msgstr ""
 msgid "unsaved_class_changes"
 msgstr ""
 
-msgid "update_adventure_prompt"
+msgid "unsubmit_program"
 msgstr ""
 
-msgid "update_profile"
+msgid "unsubmit_warning"
+msgstr ""
+
+msgid "unsubmitted"
+msgstr ""
+
+msgid "update_adventure_prompt"
 msgstr ""
 
 msgid "update_public"
@@ -1785,6 +1839,9 @@ msgid "use_of_blanks_exception"
 msgstr ""
 
 msgid "use_of_nested_functions_exception"
+msgstr ""
+
+msgid "used_in"
 msgstr ""
 
 msgid "user"
@@ -1820,7 +1877,16 @@ msgstr ""
 msgid "variables"
 msgstr ""
 
+msgid "view_adventures"
+msgstr ""
+
+msgid "view_classes"
+msgstr ""
+
 msgid "view_program"
+msgstr ""
+
+msgid "view_slides"
 msgstr ""
 
 msgid "welcome"

@@ -168,7 +168,8 @@ class TestsLevel12(HedyTester):
 
     def test_print_subtraction_with_text(self):
         code = "print 'And the winner is ' 5 - 5"
-        expected = f"print(f'''And the winner is {{{self.number_cast_transpiled(5)} - {self.number_cast_transpiled(5)}}}''')"
+        five = self.number_cast_transpiled(5)
+        expected = f"print(f'''And the winner is {{{five} - {five}}}''')"
         output = 'And the winner is 0'
 
         self.multi_level_tester(max_level=17, code=code, expected=expected, output=output)
@@ -458,6 +459,18 @@ class TestsLevel12(HedyTester):
 
         self.multi_level_tester(code=code, expected=expected, max_level=17)
 
+    def test_print_var_before_assign_gives_error(self):
+        code = textwrap.dedent("""\
+        print 'the program is ' name
+        name is 'Hedy'""")
+
+        self.multi_level_tester(
+            code=code,
+            exception=hedy.exceptions.AccessBeforeAssignException,
+            skip_faulty=False,
+            max_level=17
+        )
+
     #
     # forward tests
     #
@@ -671,13 +684,9 @@ class TestsLevel12(HedyTester):
             n = 'C4' #
             play n""")
 
-        expected = textwrap.dedent(f"""\
-            n = 'C4'
-            chosen_note = str(n).upper()
-            if chosen_note not in notes_mapping.keys() and chosen_note not in notes_mapping.values():
-                raise Exception({self.value_exception_transpiled()})
-            play(notes_mapping.get(chosen_note, chosen_note))
-            time.sleep(0.5)""")
+        expected = HedyTester.dedent(
+            "n = 'C4'",
+            self.play_transpiled('n', quotes=False))
 
         self.multi_level_tester(
             code=code,
@@ -691,16 +700,18 @@ class TestsLevel12(HedyTester):
         colors is 'orange', 'blue', 'green'
         favorite is ask 'Is your fav color' colors at 1""")
 
-        expected = textwrap.dedent("""\
-        colors = ['orange', 'blue', 'green']
-        favorite = input(f'''Is your fav color{colors[int(1)-1]}''')
-        try:
-          favorite = int(favorite)
-        except ValueError:
-          try:
-            favorite = float(favorite)
-          except ValueError:
-            pass""")
+        expected = self.dedent(
+            "colors = ['orange', 'blue', 'green']",
+            self.list_access_transpiled('colors[int(1)-1]'),
+            f"""\
+            favorite = input(f'''Is your fav color{{colors[int(1)-1]}}''')
+            try:
+              favorite = int(favorite)
+            except ValueError:
+              try:
+                favorite = float(favorite)
+              except ValueError:
+                pass""")
 
         self.multi_level_tester(code=code, unused_allowed=True, expected=expected, max_level=14)
 
@@ -818,7 +829,8 @@ class TestsLevel12(HedyTester):
             favorite is ask 'Is your fav number ' numbers at random""")
         expected = HedyTester.dedent(
             "numbers = [1, 2, 3]",
-            HedyTester.input_transpiled('favorite', 'Is your fav number {random.choice(numbers)}'))
+            self.list_access_transpiled('random.choice(numbers)'),
+            self.input_transpiled('favorite', 'Is your fav number {random.choice(numbers)}'))
 
         self.multi_level_tester(code=code, unused_allowed=True, expected=expected, max_level=15)
 
@@ -828,7 +840,8 @@ class TestsLevel12(HedyTester):
             favorite is ask 'Is your fav number ' numbers at 2""")
         expected = HedyTester.dedent(
             "numbers = [1, 2, 3]",
-            HedyTester.input_transpiled('favorite', 'Is your fav number {numbers[int(2)-1]}'))
+            self.list_access_transpiled('numbers[int(2)-1]'),
+            self.input_transpiled('favorite', 'Is your fav number {numbers[int(2)-1]}'))
 
         self.multi_level_tester(code=code, unused_allowed=True, expected=expected, max_level=15)
 
@@ -851,6 +864,18 @@ class TestsLevel12(HedyTester):
             HedyTester.input_transpiled('favorite', 'Is your fav number {number}'))
 
         self.multi_level_tester(code=code, unused_allowed=True, expected=expected, max_level=17)
+
+    def test_ask_var_before_assign_gives_error(self):
+        code = textwrap.dedent("""\
+        n is ask 'the program is ' name
+        name is 'Hedy'""")
+
+        self.multi_level_tester(
+            code=code,
+            exception=hedy.exceptions.AccessBeforeAssignException,
+            skip_faulty=False,
+            max_level=17
+        )
 
     #
     # sleep tests
@@ -882,13 +907,10 @@ class TestsLevel12(HedyTester):
         expected = textwrap.dedent(f"""\
         n = [1, 2, 3]
         try:
-          try:
-            n[int(1)-1]
-          except IndexError:
-            raise Exception({self.index_exception_transpiled()})
-          time.sleep(int(n[int(1)-1]))
-        except ValueError:
-          raise Exception({self.value_exception_transpiled()})""")
+          n[int(1)-1]
+        except IndexError:
+          raise Exception({self.index_exception_transpiled()})
+        time.sleep({self.int_cast_transpiled('n[int(1)-1]', quotes=False)})""")
 
         self.multi_level_tester(max_level=15, code=code, expected=expected)
 
@@ -900,13 +922,10 @@ class TestsLevel12(HedyTester):
         expected = textwrap.dedent(f"""\
         n = [1, 2, 3]
         try:
-          try:
-            random.choice(n)
-          except IndexError:
-            raise Exception({self.index_exception_transpiled()})
-          time.sleep(int(random.choice(n)))
-        except ValueError:
-          raise Exception({self.value_exception_transpiled()})""")
+          random.choice(n)
+        except IndexError:
+          raise Exception({self.index_exception_transpiled()})
+        time.sleep({self.int_cast_transpiled('random.choice(n)', quotes=False)})""")
 
         self.multi_level_tester(max_level=15, code=code, expected=expected)
 
@@ -1050,6 +1069,13 @@ class TestsLevel12(HedyTester):
         expected = "name = 'felienne'"
 
         self.multi_level_tester(code=code, unused_allowed=True, expected=expected, max_level=17)
+
+    @parameterized.expand(HedyTester.quotes)
+    def test_assign_empty_string(self, q):
+        code = f"name = {q}{q}"
+        expected = "name = ''"
+
+        self.multi_level_tester(code=code, unused_allowed=True, expected=expected)
 
     def test_assign_text_with_inner_double_quote(self):
         code = """a is 'It says "Hedy"'"""
@@ -1560,7 +1586,7 @@ class TestsLevel12(HedyTester):
         a is 1
         if a is 1
             print a
-        else    
+        else
             print 'nee'""")
 
         expected = textwrap.dedent("""\
@@ -1617,8 +1643,8 @@ class TestsLevel12(HedyTester):
         repeat 5 times
             print 'koekoek'""")
 
-        expected = textwrap.dedent("""\
-        for __i in range(int('5')):
+        expected = textwrap.dedent(f"""\
+        for __i in range({self.int_cast_transpiled(5)}):
           print(f'''koekoek''')
           time.sleep(0.1)""")
 
@@ -1630,13 +1656,11 @@ class TestsLevel12(HedyTester):
         repeat n times
             print 'me wants a cookie!'""")
 
-        expected = HedyTester.dedent(
-            "n = 5",
-            self.variable_type_check_transpiled('n', 'int'),
-            "for __i in range(int(n)):",
-            ("print(f'''me wants a cookie!''')", '  '),
-            ("time.sleep(0.1)", '  ')
-        )
+        expected = textwrap.dedent(f"""\
+            n = 5
+            for __i in range({self.int_cast_transpiled('n', quotes=False)}):
+              print(f'''me wants a cookie!''')
+              time.sleep(0.1)""")
 
         output = textwrap.dedent("""\
         me wants a cookie!
@@ -1657,7 +1681,7 @@ class TestsLevel12(HedyTester):
 
         expected = textwrap.dedent(f"""\
         count = 1
-        for __i in range(int('12')):
+        for __i in range({self.int_cast_transpiled(12)}):
           print(f'''{{count}} times 12 is {{{self.number_cast_transpiled('count')} * {self.number_cast_transpiled(12)}}}''')
           count = {self.addition_transpiled('count', 1)}
           time.sleep(0.1)""")
@@ -1669,8 +1693,8 @@ class TestsLevel12(HedyTester):
         repeat 5 times #This should be ignored
             sleep""")
 
-        expected = textwrap.dedent("""\
-        for __i in range(int('5')):
+        expected = textwrap.dedent(f"""\
+        for __i in range({self.int_cast_transpiled(5)}):
           time.sleep(1)
           time.sleep(0.1)""")
 
@@ -1684,7 +1708,7 @@ class TestsLevel12(HedyTester):
             print 'me wants a cookie!'""")
 
         expected = textwrap.dedent(f"""\
-        for __i in range(int('{int(number)}')):
+        for __i in range({self.int_cast_transpiled(int(number))}):
           print(f'''me wants a cookie!''')
           time.sleep(0.1)""")
 
@@ -1703,13 +1727,37 @@ class TestsLevel12(HedyTester):
             repeat 3 times
                 print 'hello'""")
 
-        expected = textwrap.dedent("""\
-           for __i in range(int('2')):
-             for __i in range(int('3')):
+        expected = textwrap.dedent(f"""\
+           for __i in range({self.int_cast_transpiled(2)}):
+             for __i in range({self.int_cast_transpiled(3)}):
                print(f'''hello''')
                time.sleep(0.1)""")
 
         self.multi_level_tester(code=code, expected=expected, max_level=17)
+
+    def test_repeat_nested_multi_commands(self):
+        code = textwrap.dedent("""\
+            repeat 3 times
+                print 3
+                repeat 5 times
+                    print 5
+                print 1""")
+
+        expected = textwrap.dedent(f"""\
+            for __i in range({self.int_cast_transpiled(3)}):
+              print(f'''3''')
+              for __i in range({self.int_cast_transpiled(5)}):
+                print(f'''5''')
+                time.sleep(0.1)
+              print(f'''1''')
+              time.sleep(0.1)""")
+
+        self.multi_level_tester(
+            code=code,
+            expected=expected,
+            max_level=17,
+            skip_faulty=False
+        )
 
     #
     # for list command
@@ -1888,7 +1936,8 @@ class TestsLevel12(HedyTester):
         ('-', '-', '4')])
     def test_int_calc(self, op, transpiled_op, output):
         code = f"print 6 {op} 2"
-        expected = f"print(f'''{{{self.number_cast_transpiled(6)} {transpiled_op} {self.number_cast_transpiled(2)}}}''')"
+        expected = textwrap.dedent(f"""\
+            print(f'''{{{self.number_cast_transpiled(6)} {transpiled_op} {self.number_cast_transpiled(2)}}}''')""")
 
         self.multi_level_tester(code=code, unused_allowed=True, expected=expected, output=output, max_level=17)
 
@@ -1904,7 +1953,10 @@ class TestsLevel12(HedyTester):
         ('-', '-', '3')])
     def test_nested_int_calc(self, op, transpiled_op, output):
         code = f"print 10 {op} 5 {op} 2"
-        expected = f"print(f'''{{{self.number_cast_transpiled(10)} {transpiled_op} {self.number_cast_transpiled(5)} {transpiled_op} {self.number_cast_transpiled(2)}}}''')"
+        ten = self.number_cast_transpiled(10)
+        five = self.number_cast_transpiled(5)
+        two = self.number_cast_transpiled(2)
+        expected = f"print(f'''{{{ten} {transpiled_op} {five} {transpiled_op} {two}}}''')"
 
         self.multi_level_tester(code=code, unused_allowed=True, expected=expected, output=output, max_level=17)
 
@@ -1937,7 +1989,8 @@ class TestsLevel12(HedyTester):
     @parameterized.expand(['-', '*', '/'])
     def test_print_float_calc_with_string(self, op):
         code = f"print 'het antwoord is ' 2.5 {op} 2.5"
-        expected = f"print(f'''het antwoord is {{{self.number_cast_transpiled('2.5')} {op} {self.number_cast_transpiled('2.5')}}}''')"
+        twona_half = self.number_cast_transpiled('2.5')
+        expected = f"print(f'''het antwoord is {{{twona_half} {op} {twona_half}}}''')"
 
         self.multi_level_tester(code=code, expected=expected, max_level=17)
 
@@ -2213,24 +2266,16 @@ class TestsLevel12(HedyTester):
 
         expected = HedyTester.dedent("""\
         lijstje = ['kip', 'haan', 'kuiken']
-        pygame_end = False
-        while not pygame_end:
-          pygame.display.update()
-          event = pygame.event.wait()
-          if event.type == pygame.QUIT:
-            pygame_end = True
-            pygame.quit()
-            break
-          if event.type == pygame.KEYDOWN:
-            if event.unicode == 'x':
-              for dier in lijstje:
-                print(f'''dier''')
-                time.sleep(0.1)
-              break
-            # End of PyGame Event Handler    
-            else:
-              print(f'''onbekend dier''')
-              break""")
+        if_pressed_mapping = {"else": "if_pressed_default_else"}
+        if_pressed_mapping['x'] = 'if_pressed_x_'
+        def if_pressed_x_():
+            for dier in lijstje:
+              print(f'''dier''')
+              time.sleep(0.1)
+        if_pressed_mapping['else'] = 'if_pressed_else_'
+        def if_pressed_else_():
+            print(f'''onbekend dier''')
+        extensions.if_pressed(if_pressed_mapping)""")
 
         self.multi_level_tester(
             code=code,
@@ -2255,30 +2300,22 @@ class TestsLevel12(HedyTester):
         code = textwrap.dedent("""\
         x = 'PRINT'
         x is button
-        if PRINT is pressed 
+        if PRINT is pressed
             print 'The button got pressed!'
         else
             print 'Other button is pressed!'""")
 
-        expected = HedyTester.dedent(f"""\
-        x = 'PRINT'
-        create_button(x)
-        pygame_end = False
-        while not pygame_end:
-          pygame.display.update()
-          event = pygame.event.wait()
-          if event.type == pygame.QUIT:
-            pygame_end = True
-            pygame.quit()
-            break
-          if event.type == pygame.USEREVENT:
-            if event.key == 'PRINT':
-              print(f'''The button got pressed!''')
-              break
-            # End of PyGame Event Handler    
-            else:
-              print(f'''Other button is pressed!''')
-              break""")
+        expected = HedyTester.dedent("""\
+         x = 'PRINT'
+         create_button(x)
+         if_pressed_mapping = {"else": "if_pressed_default_else"}
+         if_pressed_mapping['PRINT'] = 'if_pressed_PRINT_'
+         def if_pressed_PRINT_():
+             print(f'''The button got pressed!''')
+         if_pressed_mapping['else'] = 'if_pressed_else_'
+         def if_pressed_else_():
+             print(f'''Other button is pressed!''')
+         extensions.if_pressed(if_pressed_mapping)""")
 
         self.multi_level_tester(code=code, expected=expected, max_level=16)
 
@@ -2297,7 +2334,7 @@ class TestsLevel12(HedyTester):
 
     def test_if_button_is_pressed_print_in_repeat(self):
         code = textwrap.dedent("""\
-        x = 'but' 
+        x = 'but'
         x is button
         repeat 3 times
             if but is pressed
@@ -2306,26 +2343,18 @@ class TestsLevel12(HedyTester):
                 print 'nah'""")
 
         expected = HedyTester.dedent(f"""\
-        x = 'but'
-        create_button(x)
-        for __i in range(int('3')):
-          pygame_end = False
-          while not pygame_end:
-            pygame.display.update()
-            event = pygame.event.wait()
-            if event.type == pygame.QUIT:
-              pygame_end = True
-              pygame.quit()
-              break
-            if event.type == pygame.USEREVENT:
-              if event.key == 'but':
-                print(f'''wow''')
-                break
-              # End of PyGame Event Handler    
-              else:
-                print(f'''nah''')
-                break
-          time.sleep(0.1)""")
+         x = 'but'
+         create_button(x)
+         for __i in range({self.int_cast_transpiled(3)}):
+           if_pressed_mapping = {{"else": "if_pressed_default_else"}}
+           if_pressed_mapping['but'] = 'if_pressed_but_'
+           def if_pressed_but_():
+               print(f'''wow''')
+           if_pressed_mapping['else'] = 'if_pressed_else_'
+           def if_pressed_else_():
+               print(f'''nah''')
+           extensions.if_pressed(if_pressed_mapping)
+           time.sleep(0.1)""")
 
         self.multi_level_tester(code=code, expected=expected, max_level=16)
 
@@ -2405,10 +2434,10 @@ class TestsLevel12(HedyTester):
 
         print call func with 1, 2""")
 
-        expected = textwrap.dedent(f"""\
-        def func(n1, n2):
-          return f'''{{{self.addition_transpiled('n1', 'n2')}}}'''
-        print(f'''{{func(1, 2)}}''')""")
+        expected = self.dedent(
+            "def func(n1, n2):",
+            (self.return_transpiled(f"{{{self.addition_transpiled('n1', 'n2')}}}"), '  '),
+            "print(f'''{func(1, 2)}''')")
 
         self.multi_level_tester(
             code=code,
@@ -2446,10 +2475,31 @@ class TestsLevel12(HedyTester):
 
         print call sum with 1, 2""")
 
-        expected = textwrap.dedent(f"""\
-        def sum(n1, n2):
-          return f'''{{{self.addition_transpiled('n1', 'n2')}}}'''
-        print(f'''{{sum(1, 2)}}''')""")
+        expected = self.dedent(
+            "def sum(n1, n2):",
+            (self.return_transpiled(f"{{{self.addition_transpiled('n1', 'n2')}}}"), '  '),
+            "print(f'''{sum(1, 2)}''')")
+
+        self.multi_level_tester(
+            code=code,
+            max_level=16,
+            skip_faulty=False,
+            expected=expected
+        )
+
+    def test_function_returns_number(self):
+        code = textwrap.dedent("""\
+        define func with n1, n2
+            return n1 + n2
+
+        a = call func with 1, 2
+        print a + 3""")
+
+        expected = self.dedent(
+            "def func(n1, n2):",
+            (self.return_transpiled(f"{{{self.addition_transpiled('n1', 'n2')}}}"), '  '),
+            "a = func(1, 2)",
+            f"print(f'''{{{self.addition_transpiled('a', '3')}}}''')")
 
         self.multi_level_tester(
             code=code,
@@ -2518,24 +2568,6 @@ class TestsLevel12(HedyTester):
             expected=expected
         )
 
-    def test_return_values(self):
-        code = textwrap.dedent("""\
-        define func with n1, n2
-            return n1 + n2
-
-        print call func with 1, 2""")
-
-        expected = textwrap.dedent(f"""\
-        def func(n1, n2):
-          return f'''{{{self.addition_transpiled('n1', 'n2')}}}'''
-        print(f'''{{func(1, 2)}}''')""")
-
-        self.single_level_tester(
-            code=code,
-            skip_faulty=False,
-            expected=expected
-        )
-
     def test_source_map(self):
         code = textwrap.dedent("""\
         price = 0.0
@@ -2590,26 +2622,26 @@ class TestsLevel12(HedyTester):
             '4/4-4/23': '18/4-18/77',
             '5/5-5/10': '21/1-21/6',
             '5/13-5/18': '23/1-23/6',
-            '5/5-5/25': '19/1-19/74',
-            '4/1-5/34': '18/1-19/76',
+            '5/5-5/25': '19/1-19/63',
+            '4/1-5/34': '18/1-19/65',
             '6/4-6/8': '4/14-4/18',
             '6/4-6/19': '20/4-20/73',
             '7/5-7/10': '25/1-25/6',
             '7/13-7/18': '1/1-1/6',
-            '7/5-7/25': '21/1-21/75',
-            '6/1-7/34': '20/1-21/77',
+            '7/5-7/25': '21/1-21/64',
+            '6/1-7/34': '20/1-21/66',
             '8/4-8/9': '10/42-10/47',
             '8/4-8/20': '22/4-22/74',
             '9/5-9/10': '19/1-19/6',
             '9/13-9/18': '21/1-21/6',
-            '9/5-9/25': '23/1-23/74',
-            '8/1-9/34': '22/1-23/76',
+            '9/5-9/25': '23/1-23/63',
+            '8/1-9/34': '22/1-23/65',
             '10/4-10/9': '12/3-12/8',
             '10/4-10/19': '24/4-24/73',
             '11/5-11/10': '23/1-23/6',
             '11/13-11/18': '25/1-25/6',
-            '11/5-11/25': '25/1-25/75',
-            '10/1-11/34': '24/1-25/77',
+            '11/5-11/25': '25/1-25/64',
+            '10/1-11/34': '24/1-25/66',
             '12/23-12/28': '26/25-26/30',
             '12/1-12/46': '26/1-26/50',
             '1/1-12/47': '1/1-26/50'
@@ -2649,13 +2681,9 @@ class TestsLevel12(HedyTester):
         notes = 'C4', 'E4', 'D4', 'F4', 'G4'
         play notes at random""")
 
-        expected = textwrap.dedent(f"""\
-        notes = ['C4', 'E4', 'D4', 'F4', 'G4']
-        chosen_note = str(random.choice(notes)).upper()
-        if chosen_note not in notes_mapping.keys() and chosen_note not in notes_mapping.values():
-            raise Exception({self.value_exception_transpiled()})
-        play(notes_mapping.get(chosen_note, chosen_note))
-        time.sleep(0.5)""")
+        expected = HedyTester.dedent(f"\
+            notes = ['C4', 'E4', 'D4', 'F4', 'G4']",
+                                     self.play_transpiled("random.choice(notes)", quotes=False))
 
         self.multi_level_tester(
             code=code,
@@ -2673,15 +2701,12 @@ class TestsLevel12(HedyTester):
         repeat 10 times
             play notes at random""")
 
-        expected = textwrap.dedent(f"""\
-        notes = [1, 2, 3]
-        for __i in range(int('10')):
-          chosen_note = str(random.choice(notes)).upper()
-          if chosen_note not in notes_mapping.keys() and chosen_note not in notes_mapping.values():
-              raise Exception({self.value_exception_transpiled()})
-          play(notes_mapping.get(chosen_note, chosen_note))
-          time.sleep(0.5)
-          time.sleep(0.1)""")
+        expected = HedyTester.dedent(
+            f"""\
+            notes = [1, 2, 3]
+            for __i in range({self.int_cast_transpiled(10)}):""",
+            (self.play_transpiled('random.choice(notes)', quotes=False), '  '),
+            ("time.sleep(0.1)", '  '))
 
         self.multi_level_tester(
             code=code,
@@ -2697,13 +2722,11 @@ class TestsLevel12(HedyTester):
         code = textwrap.dedent(f"""\
             note is 34
             play note {op} 1""")
-        expected = textwrap.dedent(f"""\
-            note = 34
-            chosen_note = str({self.number_cast_transpiled('note')} {op} {self.number_cast_transpiled(1)}).upper()
-            if chosen_note not in notes_mapping.keys() and chosen_note not in notes_mapping.values():
-                raise Exception({self.value_exception_transpiled()})
-            play(notes_mapping.get(chosen_note, chosen_note))
-            time.sleep(0.5)""")
+        expected = HedyTester.dedent(
+            "note = 34",
+            self.play_transpiled(
+                f"{self.number_cast_transpiled('note')} {op} {self.number_cast_transpiled(1)}", quotes=False
+            ))
 
         self.multi_level_tester(
             code=code,
@@ -2715,13 +2738,9 @@ class TestsLevel12(HedyTester):
         code = textwrap.dedent(f"""\
             note is 34
             play note + 1""")
-        expected = textwrap.dedent(f"""\
-            note = 34
-            chosen_note = str({self.addition_transpiled('note', 1)}).upper()
-            if chosen_note not in notes_mapping.keys() and chosen_note not in notes_mapping.values():
-                raise Exception({self.value_exception_transpiled()})
-            play(notes_mapping.get(chosen_note, chosen_note))
-            time.sleep(0.5)""")
+        expected = HedyTester.dedent(
+            "note = 34",
+            self.play_transpiled(self.addition_transpiled('note', 1), quotes=False))
 
         self.multi_level_tester(
             code=code,

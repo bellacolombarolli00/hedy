@@ -2,21 +2,29 @@ from collections import namedtuple
 from enum import Enum
 from difflib import SequenceMatcher
 import re
-from flask import g, jsonify, request
+from flask import g, jsonify, make_response, request
 from flask_babel import gettext
 import utils
 import hedy_content
 import exceptions as hedy_exceptions
 from hedy import check_program_size_is_valid, parse_input, is_program_valid, process_input_string, HEDY_MAX_LEVEL
 import hedy
+from hedy_error import get_error_text
 import jinja_partials
 from website.flask_helpers import render_template
 from website import querylog
 from website.auth import is_admin, is_teacher, requires_admin, requires_login
-
+from timeit import default_timer as timer
 from .database import Database
 from .website_module import WebsiteModule, route
 from bs4 import BeautifulSoup
+
+import logging
+from logging_config import LOGGING_CONFIG
+from logging.config import dictConfig as logConfig
+
+logConfig(LOGGING_CONFIG)
+logger = logging.getLogger(__name__)
 
 """The Key tuple is used to aggregate the raw data by level, time or username."""
 Key = namedtuple("Key", ["name", "class_"])
@@ -41,7 +49,7 @@ class StatisticsModule(WebsiteModule):
     @requires_login
     def render_class_grid_overview(self, user, class_id):
         if not is_teacher(user) and not is_admin(user):
-            return utils.error_page(error=403, ui_message=gettext("retrieve_class_error"))
+            return utils.error_page(error=401, ui_message=gettext("retrieve_class_error"))
 
         students, class_, class_adventures_formatted, ticked_adventures, \
             adventure_names, student_adventures = self.get_grid_info(
@@ -260,16 +268,19 @@ class StatisticsModule(WebsiteModule):
                 content = adventure['content']
                 soup = BeautifulSoup(content, features="html.parser")
                 for pre in soup.find_all('pre'):
-                    adventure_snippets.append(pre.contents[0])
+                    adventure_snippets.append(str(pre.contents[0]))
 
-        student_code = program['code']
-        student_code = student_code
+        student_code = program['code'].strip()
         # now we have to calculate the differences between the student code and the code snippets
         can_save = True
         for snippet in adventure_snippets:
+            if re.search(r'<code.*?>.*?</code>', snippet):
+                snippet = re.sub(r'<code.*?>(.*?)</code>', r'\1', snippet)
+            snippet = snippet.strip()
             seq_match = SequenceMatcher(None, snippet, student_code)
+            matching_ratio = round(seq_match.ratio(), 2)
             # Allowing a difference of more than 10% or the student filled the placeholders
-            if seq_match.ratio() > 0.95 and (self.has_placeholder(student_code) or not self.has_placeholder(snippet)):
+            if matching_ratio >= 0.95 and (self.has_placeholder(student_code) or not self.has_placeholder(snippet)):
                 can_save = False
         return can_save
 
@@ -334,8 +345,11 @@ class LiveStatisticsModule(WebsiteModule):
         self.MAX_FEED_SIZE = 4
 
     def __selected_levels(self, class_id):
+        start = timer()
         class_customization = get_customizations(self.db, class_id)
         class_overview = class_customization.get('dashboard_customization')
+        end = timer()
+        logger.debug(f'Time taken by __selected_levels {end-start}')
         if class_overview:
             return class_overview.get('selected_levels', [1])
         return [1]
@@ -348,6 +362,7 @@ class LiveStatisticsModule(WebsiteModule):
 
     def __all_students(self, class_):
         """Returns a list of all students in a class along with some info."""
+        start = timer()
         students = []
         for student_username in class_.get("students", []):
             programs = self.db.programs_for_user(student_username)
@@ -364,6 +379,8 @@ class LiveStatisticsModule(WebsiteModule):
                     "current_level": programs[0]['level'] if programs else '0'
                 }
             )
+        end = timer()
+        logger.debug(f'Time taken by __all_students {end-start}')
         return students
 
     def __get_adventures_for_overview(self, user, class_id):
@@ -404,7 +421,7 @@ class LiveStatisticsModule(WebsiteModule):
     @requires_login
     def render_live_stats(self, user, class_id):
         if not is_teacher(user) and not is_admin(user):
-            return utils.error_page(error=403, ui_message=gettext("retrieve_class_error"))
+            return utils.error_page(error=401, ui_message=gettext("retrieve_class_error"))
 
         class_ = self.db.get_class(class_id)
         if not class_ or (class_["teacher"] != user["username"] and not is_admin(user)):
@@ -439,6 +456,7 @@ class LiveStatisticsModule(WebsiteModule):
         )
 
     def get_class_live_stats(self, user, class_):
+        start = timer()
         # Retrieve common errors and selected levels in class overview from the database for class
         selected_levels = self.__selected_levels(class_['id'])
         if selected_levels:
@@ -475,7 +493,8 @@ class LiveStatisticsModule(WebsiteModule):
                     programs_for_student[_student] = adventures_for_student
             if programs_for_student != []:
                 attempted_adventures[level] = programs_for_student
-
+        end = timer()
+        logger.debug(f'Time taken by get_class_live_stats {end-start}')
         return students, common_errors, selected_levels, quiz_info, attempted_adventures, adventures
 
     @route("/live_stats/class/<class_id>/select_level", methods=["GET"])
@@ -485,7 +504,7 @@ class LiveStatisticsModule(WebsiteModule):
         Adds or remove the current level from the UI
         """
         if not is_teacher(user) and not is_admin(user):
-            return utils.error_page(error=403, ui_message=gettext("retrieve_class_error"))
+            return utils.error_page(error=401, ui_message=gettext("retrieve_class_error"))
 
         class_ = self.db.get_class(class_id)
         if not class_ or (class_["teacher"] != user["username"] and not is_admin(user)):
@@ -542,7 +561,7 @@ class LiveStatisticsModule(WebsiteModule):
         """
 
         if not is_teacher(user) and not is_admin(user):
-            return utils.error_page(error=403, ui_message=gettext("retrieve_class_error"))
+            return utils.error_page(error=401, ui_message=gettext("retrieve_class_error"))
 
         class_ = self.db.get_class(class_id)
         if not class_ or (class_["teacher"] != user["username"] and not is_admin(user)):
@@ -559,7 +578,7 @@ class LiveStatisticsModule(WebsiteModule):
         if student:
             class_students = class_.get("students", [])
             if student not in class_students:
-                return utils.error_page(error=403, ui_message=gettext('not_enrolled'))
+                return utils.error_page(error=404, ui_message=gettext('not_enrolled'))
 
             student_programs, graph_data, graph_labels, selected_student = self.get_student_data(student, class_)
 
@@ -621,7 +640,7 @@ class LiveStatisticsModule(WebsiteModule):
         """
 
         if not is_teacher(user) and not is_admin(user):
-            return utils.error_page(error=403, ui_message=gettext("retrieve_class_error"))
+            return utils.error_page(error=401, ui_message=gettext("retrieve_class_error"))
 
         class_ = self.db.get_class(class_id)
         if not class_ or (class_["teacher"] != user["username"] and not is_admin(user)):
@@ -632,7 +651,7 @@ class LiveStatisticsModule(WebsiteModule):
 
         students = class_.get("students", [])
         if student not in students:
-            return utils.error_page(error=403, ui_message=gettext('not_enrolled'))
+            return utils.error_page(error=404, ui_message=gettext('not_enrolled'))
 
         students, common_errors, selected_levels, quiz_info, attempted_adventures, \
             adventures = self.get_class_live_stats(user, class_)
@@ -697,7 +716,7 @@ class LiveStatisticsModule(WebsiteModule):
                  'submitted': item.get('submitted'),
                  'public': item.get('public'),
                  'number_lines': item['code'].count('\n') + 1,
-                 'error_message': _translate_error(error_class, item['lang']) if error_class else None,
+                 'error_message': get_error_text(error_class, item['lang']) if error_class else None,
                  'error_header': 'Oops'  # TODO: get proper header message that gets translated, e.g. Transpile_error
                  }
             )
@@ -801,7 +820,7 @@ class LiveStatisticsModule(WebsiteModule):
                 self.db.update_class_errors(common_errors)
                 break
 
-        return {}, 200
+        return make_response('', 204)
 
     def retrieve_exceptions_per_student(self, class_id):
         """
@@ -809,6 +828,7 @@ class LiveStatisticsModule(WebsiteModule):
         :param class_id: class id
         :return: exceptions_per_user
         """
+        start = timer()
         class_ = self.db.get_class(class_id)
         exceptions_per_user = {}
         students = sorted(class_.get("students", []))
@@ -819,7 +839,8 @@ class LiveStatisticsModule(WebsiteModule):
                 program_stats = program_stats[-1]
                 exceptions = {k: v for k, v in program_stats.items() if k.lower().endswith("exception")}
                 exceptions_per_user[student_username] = exceptions
-
+        end = timer()
+        logger.debug(f'Tike taken by retrieve_exceptions_per_student {end-start}')
         return exceptions_per_user
 
     def new_id_calc(self, common_errors, class_id):
@@ -855,6 +876,7 @@ class LiveStatisticsModule(WebsiteModule):
         """
         Detects misconceptions of students in the class based on errors they are making.
         """
+        start = timer()
         common_errors = self.__common_errors(class_id)
         # Group the error messages by session and count their occurrences
         exceptions_per_user = self.retrieve_exceptions_per_student(class_id)  # retrieves relevant data from db
@@ -912,7 +934,8 @@ class LiveStatisticsModule(WebsiteModule):
                     'active': 1,
                     "students": users_only
                 })
-
+        end = timer()
+        logger.debug(f'Time taken by common_exception_detection {end-start}')
         return self.db.update_class_errors(common_errors)
 
     @route("/live_stats/class/<class_id>", methods=["POST"])
@@ -931,7 +954,7 @@ class LiveStatisticsModule(WebsiteModule):
 
         self.db.update_class_customizations(class_customization)
 
-        return {}, 200
+        return make_response('', 204)
 
 
 def add(username, action):
@@ -1249,29 +1272,6 @@ def _get_error_info(code, level, lang='en'):
     except hedy_exceptions.HedyException as exc:
         return exc
     return None
-
-
-def _translate_error(error_class, lang):
-    """
-    Translates the error code to the given language.
-    This is because the error code needs to be passed through the translation things in order to give more info on the
-    student details
-    screen.
-
-    A part of this code is duplicate from app.hedy_error_to_response but importing app.py leads to circular
-    imports and moving those functions to util.py is cumbersome (but not impossible) given the integration with other
-    functions in app.py
-    """
-    class_args = error_class.arguments
-
-    error_template = gettext('' + str(error_class.error_code))
-
-    # Check if argument is substring of error_template, if so replace
-    for k, v in class_args.items():
-        if f'{{{k}}}' in error_template:
-            error_template = error_template.replace(f'{{{k}}}', str(v))
-
-    return error_template
 
 
 def _build_url_args(**kwargs):

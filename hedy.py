@@ -8,8 +8,9 @@ from lark.exceptions import UnexpectedEOF, UnexpectedCharacters, VisitError
 from lark import Tree, Transformer, visitors, v_args
 from os import path, getenv
 
-import warnings
 import hedy
+import hedy_error
+import hedy_grammar
 import hedy_translation
 from utils import atomic_write_file
 from hedy_content import ALL_KEYWORD_LANGUAGES
@@ -31,7 +32,7 @@ import utils
 from hedy_content import KEYWORDS
 from hedy_sourcemap import SourceMap, source_map_transformer
 
-from prefixes.music import notes_mapping
+from prefixes.music import present_in_notes_mapping
 
 HEDY_MAX_LEVEL = 18
 HEDY_MAX_LEVEL_SKIPPING_FAULTY = 5
@@ -161,51 +162,24 @@ reserved_words = set(PYTHON_BUILTIN_FUNCTIONS + PYTHON_KEYWORDS + LIBRARIES)
 
 # Let's retrieve all keywords dynamically from the cached KEYWORDS dictionary
 indent_keywords = {}
-for lang, keywords in KEYWORDS.items():
-    indent_keywords[lang] = []
+for lang_, keywords in KEYWORDS.items():
+    indent_keywords[lang_] = []
     for keyword in ['if', 'elif', 'for', 'repeat', 'while', 'else', 'define', 'def']:
-        indent_keywords[lang].append(keyword)  # always also check for En
-        indent_keywords[lang].append(keywords.get(keyword))
+        indent_keywords[lang_].append(keyword)  # always also check for En
+        indent_keywords[lang_].append(keywords.get(keyword))
 
 
-# These are the preprocessor rules that we use to specify changes in the rules that
-# are expected to work across several rules
-# Example
-# for<needs_colon> instead of defining the whole rule again.
+def make_value_error(command, tip, lang, value='{}'):
+    return make_error_text(exceptions.RuntimeValueException(command=command, value=value, tip=tip), lang)
 
 
-def needs_colon(rule):
-    pos = rule.find('_EOL (_SPACE command)')
-    return f'{rule[0:pos]} _COLON {rule[pos:]}'
+def make_values_error(command, tip, lang):
+    return make_error_text(exceptions.RuntimeValuesException(command=command, value='{}', tip=tip), lang)
 
 
-PREPROCESS_RULES = {
-    'needs_colon': needs_colon
-}
-
-
-def translate_value_error(command, value, suggested_type):
-    return translate_error(gettext('catch_value_exception'), [
-        ('{command}', command, 1),
-        ('{value}', value, 1),
-        ('{suggestion}', translate_suggestion(suggested_type), 0)
-    ])
-
-
-def translate_values_error(command, suggested_type):
-    return translate_error(gettext("catch_multiple_values_exception"), [
-        ('{command}', command, 1),
-        ('{value}', '{}', 1),
-        ('{suggestion}', translate_suggestion(suggested_type), 0)
-    ])
-
-
-def translate_error(exception_text, variables):
-    for template, value, is_highlighted in variables:
-        result = style_command(value) if is_highlighted else value
-        exception_text = exception_text.replace(template, result)
-    # The error is transpiled in f-strings with ", ' and ''' quotes. The only option is to use """.
-    return '"""' + exception_text + '"""'
+def make_error_text(ex, lang):
+    # The error text is transpiled in f-strings with ", ' and ''' quotes. The only option is to use """.
+    return f'"""{hedy_error.get_error_text(ex, lang)}"""'
 
 
 def translate_suggestion(suggestion_type):
@@ -239,6 +213,9 @@ class Command:
     repeat = 'repeat'
     for_list = 'for in'
     for_loop = 'for in range'
+    if_ = 'if'
+    else_ = 'else'
+    elif_ = 'elif'
     addition = '+'
     subtraction = '-'
     multiplication = '*'
@@ -253,6 +230,8 @@ class Command:
     define = 'define'
     call = 'call'
     returns = 'return'
+    play = 'play'
+    while_ = 'while'
 
 
 translatable_commands = {Command.print: ['print'],
@@ -319,7 +298,7 @@ commands_per_level = {1: ['ask', 'color', 'echo', 'forward', 'play', 'print', 't
 add_level(commands_per_level, level=2, add=['is', 'sleep'], remove=['echo'])
 add_level(commands_per_level, level=3, add=['add', 'at', 'from', 'random', 'remove', 'to'])
 add_level(commands_per_level, level=4, add=['clear'])
-add_level(commands_per_level, level=5, add=['assign_button', 'else', 'if', 'ifpressed', 'in', 'not_in'])
+add_level(commands_per_level, level=5, add=['assign_button', 'else', 'if', 'if_pressed', 'in', 'not_in'])
 add_level(commands_per_level, level=6)
 add_level(commands_per_level, level=7, add=['repeat', 'times'])
 add_level(commands_per_level, level=8)
@@ -354,12 +333,14 @@ def command_make_color_local(language):
 # Commands and their types per level (only partially filled!)
 commands_and_types_per_level = {
     Command.print: {
-        1: [HedyType.string, HedyType.integer, HedyType.input],
+        1: [HedyType.string, HedyType.integer, HedyType.input, HedyType.list],
+        4: [HedyType.string, HedyType.integer, HedyType.input],
         12: [HedyType.string, HedyType.integer, HedyType.input, HedyType.float],
         16: [HedyType.string, HedyType.integer, HedyType.input, HedyType.float, HedyType.list]
     },
     Command.ask: {
-        1: [HedyType.string, HedyType.integer, HedyType.input],
+        1: [HedyType.string, HedyType.integer, HedyType.input, HedyType.list],
+        4: [HedyType.string, HedyType.integer, HedyType.input],
         12: [HedyType.string, HedyType.integer, HedyType.input, HedyType.float],
         16: [HedyType.string, HedyType.integer, HedyType.input, HedyType.float, HedyType.list]
     },
@@ -367,8 +348,8 @@ commands_and_types_per_level = {
                    2: [HedyType.integer, HedyType.input],
                    12: [HedyType.integer, HedyType.input, HedyType.float]
                    },
-    Command.color: {1: english_colors,
-                    2: [english_colors, HedyType.string, HedyType.input]},
+    Command.color: {1: [english_colors, HedyType.list],
+                    2: [english_colors, HedyType.string, HedyType.input, HedyType.list]},
     Command.forward: {1: [HedyType.integer, HedyType.input],
                       12: [HedyType.integer, HedyType.input, HedyType.float]
                       },
@@ -434,9 +415,9 @@ def get_list_keywords(commands, to_lang):
         with open(to_yaml_filesname_with_path, 'r', encoding='utf-8') as stream:
             to_yaml_dict = yaml.safe_load(stream)
         for command in commands:
-            if command == 'ifpressed':  # TODO: this is a bit of a hack
+            if command == 'if_pressed':  # TODO: this is a bit of a hack
                 command = 'pressed'  # since in the yamls they are called pressed
-            if command == 'assign_button':  # but in the grammar 'ifpressed'
+            if command == 'assign_button':  # but in the grammar 'if_pressed'
                 command = 'button'  # should be changed in the yaml eventually!
             try:
                 translation_commands.append(to_yaml_dict[command])
@@ -819,7 +800,8 @@ class TypeValidator(Transformer):
         return self.to_typed_tree(tree, type_)
 
     def text_in_quotes(self, tree):
-        return self.to_typed_tree(tree.children[0], HedyType.string)
+        t = tree.children[0] if tree.children else tree
+        return self.to_typed_tree(t, HedyType.string)
 
     def var_access(self, tree):
         return self.to_typed_tree(tree, HedyType.string)
@@ -1064,18 +1046,6 @@ class Filter(Transformer):
         return all(args), ''.join([c for c in args]), meta
 
 
-class UsesPyGame(Transformer):
-    command_prefix = (f"""\
-pygame_end = False
-while not pygame_end:
-  pygame.display.update()
-  event = pygame.event.wait()
-  if event.type == pygame.QUIT:
-    pygame_end = True
-    pygame.quit()
-    break""")
-
-
 class AllCommands(Transformer):
     def __init__(self, level):
         self.level = level
@@ -1117,9 +1087,8 @@ class AllCommands(Transformer):
         # for the achievements we want to be able to also detect which operators were used by a kid
         operators = ['addition', 'subtraction', 'multiplication', 'division']
 
-        if production_rule_name in commands_per_level[
-                self.level] or production_rule_name in operators or production_rule_name == 'ifpressed_else':
-            # ifpressed_else is not in the yamls, upsetting lookup code to get an alternative later
+        if production_rule_name in commands_per_level[self.level] or production_rule_name in operators or production_rule_name == 'if_pressed_else':
+            # if_pressed_else is not in the yamls, upsetting lookup code to get an alternative later
             # lookup should be fixed instead, making a special case for now
             if production_rule_name == 'else':  # use of else also has an if
                 return ['if', 'else'] + leaves
@@ -1214,9 +1183,9 @@ class IsValid(Filter):
         if sug_exists is None:  # there is no suggestion
             raise exceptions.MissingCommandException(level=self.level, line_number=meta.line)
         if not sug_exists:  # the suggestion is invalid, i.e. identical to the command
-            invalid_command_en = hedy_translation.translate_keyword_to_en(invalid_command, lang)
+            invalid_command_en = hedy_translation.translate_keyword_to_en(invalid_command, self.lang)
             if invalid_command_en == Command.turn:
-                arg = args[0][0]
+                arg = args[1][1]
                 raise hedy.exceptions.InvalidArgumentException(
                     command=invalid_command,
                     allowed_types=get_allowed_types(Command.turn, self.level),
@@ -1273,9 +1242,8 @@ class IsValid(Filter):
             tip='no_more_flat_if',
             line_number=meta.line)
 
-    def error_ifpressed_missing_else(self, meta, args):
-        raise exceptions.MissingElseForPressitException(
-            command='ifpressed_else', level=self.level, line_number=meta.line)
+    def error_else_no_if(self, meta, args):
+        raise exceptions.ElseWithoutIfException(meta.line)
 
     def error_for_missing_in(self, meta, args):
         raise exceptions.MissingAdditionalCommand(command='for', missing_command='in', line_number=meta.line)
@@ -1291,6 +1259,44 @@ class IsValid(Filter):
 
     def error_nested_define(self, meta, args):
         raise exceptions.NestedFunctionException()
+
+    def error_if_pressed_missing_else(self, meta, args):
+        raise exceptions.MissingElseForPressitException(
+            command='ifpressed_else', level=self.level, line_number=meta.line)
+
+    def if_pressed_no_colon(self, meta, args):
+        raise exceptions.MissingColonException(command=Command.if_, line_number=meta.line)
+
+    def if_pressed_elifs_no_colon(self, meta, args):
+        # if_pressed_elifs starts with _EOL, so we need to add +1 to its line
+        raise exceptions.MissingColonException(command=Command.elif_, line_number=meta.line+1)
+
+    def if_pressed_elses_no_colon(self, meta, args):
+        # if_pressed_elses starts with _EOL, so we need to add +1 to its line
+        raise exceptions.MissingColonException(command=Command.else_, line_number=meta.line+1)
+
+    def ifs_no_colon(self, meta, args):
+        raise exceptions.MissingColonException(command=Command.if_, line_number=meta.line)
+
+    def elifs_no_colon(self, meta, args):
+        # elifs starts with _EOL, so we need to add +1 to its line
+        raise exceptions.MissingColonException(command=Command.elif_, line_number=meta.line+1)
+
+    def elses_no_colon(self, meta, args):
+        # elses starts with _EOL, so we need to add +1 to its line
+        raise exceptions.MissingColonException(command=Command.else_, line_number=meta.line+1)
+
+    def for_list_no_colon(self, meta, args):
+        raise exceptions.MissingColonException(command=Command.for_list, line_number=meta.line)
+
+    def for_loop_no_colon(self, meta, args):
+        raise exceptions.MissingColonException(command=Command.for_loop, line_number=meta.line)
+
+    def while_loop_no_colon(self, meta, args):
+        raise exceptions.MissingColonException(command=Command.while_, line_number=meta.line)
+
+    def define_no_colon(self, meta, args):
+        raise exceptions.MissingColonException(command=Command.define, line_number=meta.line)
 
     # other rules are inherited from Filter
 
@@ -1389,29 +1395,53 @@ class ConvertToPython(Transformer):
         else:
             return ""
 
+    def is_var_in_lookup(self, variable_name):
+        all_names = [a.name for a in self.lookup]
+        return variable_name in all_names
+
+    # The var_to_escape parameter allows the ask command to force the variable defined
+    # by itself, i.e. the left-hand-side var, to not be defined on the same line
+    def is_var_defined_before_access(self, variable_name, access_line_number, var_to_escape=''):
+        def is_before(entry, line):
+            return entry.definition_line <= line if entry.name != var_to_escape else entry.definition_line < line
+
+        all_names_before_access_line = [entry.name for entry in self.lookup if is_before(entry, access_line_number)]
+        return variable_name in all_names_before_access_line
+
+    # In level 3, a list name without index or random should be treated as a literal string, e.g.
+    #   color = red, blue, yellow
+    #   print What is your favorite color? <- color is not a var reference here, but the text 'color'
+    def is_unreferenced_list(self, variable_name):
+        for entry in self.lookup:
+            if entry.name == escape_var(variable_name):
+                return entry.type_ == HedyType.list and '[' not in variable_name
+        return False
+
     # default for line number is max lines so if it is not given, there
     # is no check on whether the var is defined
     def is_variable(self, variable_name, access_line_number=100):
-        all_names = [a.name for a in self.lookup]
-        all_names_before_access_line = [a.name for a in self.lookup if a.definition_line <= access_line_number]
-        if variable_name in all_names and variable_name not in all_names_before_access_line:
-            # referenced before assignment!
+        if self.is_var_in_lookup(variable_name) and not self.is_var_defined_before_access(variable_name,
+                                                                                          access_line_number):
             definition_line_number = [a.definition_line for a in self.lookup if a.name == variable_name][0]
             raise hedy.exceptions.AccessBeforeAssignException(
                 name=variable_name,
                 access_line_number=access_line_number,
                 definition_line_number=definition_line_number)
-        else:
-            # valid use, store!
-            self.add_variable_access_location(variable_name, access_line_number)
 
-        is_function = False
+        # valid use, store!
+        self.add_variable_access_location(variable_name, access_line_number)
+
+        all_names_before_access_line = [a.name for a in self.lookup if a.definition_line <= access_line_number]
+        if escape_var(variable_name) in all_names_before_access_line:
+            return True
+
         if isinstance(variable_name, str):
             pattern = r'^([a-zA-Z_][a-zA-Z0-9_]*)\('
             match = re.match(pattern, variable_name)
             is_function = match and [a.name for a in self.lookup if match.group(1) + "()" == a.name]
+            return is_function
 
-        return escape_var(variable_name) in all_names_before_access_line or is_function
+        return False
 
     def process_variable(self, arg, access_line_number=100):
         # processes a variable by hashing and escaping when needed
@@ -1430,10 +1460,11 @@ class ConvertToPython(Transformer):
             return escape_var(arg)
         return arg
 
-    def process_variable_for_fstring(self, variable_name, access_line_number=100):
-        self.add_variable_access_location(variable_name, access_line_number)
+    def process_variable_for_fstring(self, variable_name, access_line_number=100, var_to_escape=''):
 
-        if self.is_variable(variable_name, access_line_number):
+        if (self.is_var_defined_before_access(variable_name, access_line_number, var_to_escape) and
+                not self.is_unreferenced_list(variable_name)):
+            self.add_variable_access_location(variable_name, access_line_number)
             return "{" + escape_var(variable_name) + "}"
         else:
             return process_characters_needing_escape(variable_name)
@@ -1503,17 +1534,6 @@ class ConvertToPython(Transformer):
                     ConvertToPython.is_float(arg) or
                     ConvertToPython.is_random(arg)):
                 raise exceptions.UnquotedAssignTextException(text=arg, line_number=meta.line)
-
-    def code_to_ensure_variable_type(self, arg, expected_type, command, suggested_type):
-        if not self.is_variable(arg):
-            return ""
-        exception = translate_value_error(command, f'{{{arg}}}', suggested_type)
-        return textwrap.dedent(f"""\
-            try:
-              {expected_type}({arg})
-            except ValueError:
-              raise Exception(f{exception})
-            """)
 
     # static methods
 
@@ -1657,47 +1677,37 @@ class ConvertToPython_1(ConvertToPython):
                                                           line_number=meta.line)
 
     def make_turn(self, parameter):
-        return self.make_turtle_command(parameter, Command.turn, 'right', False, 'int')
+        return self.make_turtle_command(parameter, Command.turn, 'right', False, HedyType.integer)
 
     def make_forward(self, parameter):
-        return self.make_turtle_command(parameter, Command.forward, 'forward', True, 'int')
+        return self.make_turtle_command(parameter, Command.forward, 'forward', True, HedyType.integer)
 
     def make_play(self, note, meta):
-        exception_text = translate_value_error('play', note, 'note')
+        ex = make_value_error(Command.play, 'suggestion_note', self.language)
 
         return textwrap.dedent(f"""\
-                if '{note}' not in notes_mapping.keys() and '{note}' not in notes_mapping.values():
-                    raise Exception({exception_text})
-                play(notes_mapping.get(str('{note}'), str('{note}')))
+                play(note_with_error('{note}', {ex}))
                 time.sleep(0.5)""")
 
     def make_play_var(self, note, meta):
-        exception_text = translate_value_error('play', note, 'note')
         self.check_var_usage([note], meta.line)
         chosen_note = note.children[0] if isinstance(note, Tree) else note
+        ex = make_value_error(Command.play, 'suggestion_note', self.language)
 
         return textwrap.dedent(f"""\
-                chosen_note = str({chosen_note}).upper()
-                if chosen_note not in notes_mapping.keys() and chosen_note not in notes_mapping.values():
-                    raise Exception({exception_text})
-                play(notes_mapping.get(chosen_note, chosen_note))
+                play(note_with_error({chosen_note}, {ex}))
                 time.sleep(0.5)""")
 
     def make_color(self, parameter, language):
         return self.make_turtle_color_command(parameter, Command.color, 'pencolor', language)
 
-    def make_turtle_command(self, parameter, command, command_text, add_sleep, type):
-        exception = ''
-        if isinstance(parameter, str):
-            exception = self.make_index_error_check_if_list([parameter])
+    def make_turtle_command(self, parameter, command, command_text, add_sleep, target_type):
+        list_index_exception = self.make_index_error_check_if_list([parameter]) if isinstance(parameter, str) else ''
         variable = self.get_fresh_var('__trtl')
-        exception_text = translate_value_error(command, variable, 'number')
-        transpiled = exception + textwrap.dedent(f"""\
-            {variable} = {parameter}
-            try:
-              {variable} = {type}({variable})
-            except ValueError:
-              raise Exception({exception_text})
+        func = 'int_with_error' if target_type == HedyType.integer else 'number_with_error'
+        ex = make_value_error(command, 'suggestion_number', self.language)
+        transpiled = list_index_exception + textwrap.dedent(f"""\
+            {variable} = {func}({parameter}, {ex})
             t.{command_text}(min(600, {variable}) if {variable} > 0 else max(-600, {variable})){self.add_debug_breakpoint()}""")
         if add_sleep and not self.is_debug:
             return add_sleep_to_command(transpiled, False, self.is_debug, location="after")
@@ -1711,12 +1721,12 @@ class ConvertToPython_1(ConvertToPython):
         # coming from a random list or ask
 
         color_dict = {hedy_translation.translate_keyword_from_en(x, language): x for x in english_colors}
-        exception_text = translate_value_error(command, parameter, 'color')
+        ex = make_value_error(command, 'suggestion_color', self.language, parameter)
         return textwrap.dedent(f"""\
             {variable} = f'{parameter}'
             color_dict = {color_dict}
             if {variable} not in {both_colors}:
-              raise Exception({exception_text})
+              raise Exception(f{ex})
             else:
               if not {variable} in {english_colors}:
                 {variable} = color_dict[{variable}]
@@ -1744,7 +1754,7 @@ class ConvertToPython_1(ConvertToPython):
         return ''.join(errors)
 
     def make_index_error(self, code, list_name):
-        exception_text = translate_error(gettext('catch_index_exception'), [('{list_name}', list_name, 1)])
+        exception_text = make_error_text(exceptions.RuntimeIndexException(name=list_name), self.language)
         return textwrap.dedent(f"""\
             try:
               {code}
@@ -1802,34 +1812,35 @@ class ConvertToPython_2(ConvertToPython_1):
         return self.var_access(meta, args)
 
     def print(self, meta, args):
-        args_new = []
-        for a in args:
-            # list access has been already rewritten since it occurs lower in the tree
-            # so when we encounter it as a child of print it will not be a subtree, but
-            # transpiled code (for example: random.choice(dieren))
-            # therefore we should not process it anymore and thread it as a variable:
-            # we set the line number to 100 so there is never an issue with variable access before
-            # assignment (regular code will not work since random.choice(dieren) is never defined as var as such)
-            if "random.choice" in a or "[" in a:
-                args_new.append(self.process_variable_for_fstring(a, meta.line))
-            else:
-                # this regex splits words from non-letter characters, such that name! becomes [name, !]
-                res = regex.findall(
-                    r"[·\p{Lu}\p{Ll}\p{Lt}\p{Lm}\p{Lo}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}]+|[^·\p{Lu}\p{Ll}\p{Lt}\p{Lm}\p{Lo}\p{Nl}]+",
-                    a)
-                args_new.append(''.join([self.process_variable_for_fstring(x, meta.line) for x in res]))
-        exception = self.make_index_error_check_if_list(args)
+        args_new = [self.make_print_ask_arg(a, meta) for a in args]
         argument_string = ' '.join(args_new)
         if not self.microbit:
+            exception = self.make_index_error_check_if_list(args)
             return exception + f"print(f'{argument_string}'){self.add_debug_breakpoint()}"
         else:
-            return textwrap.dedent(f"""\
-                    display.scroll('{argument_string}')""")
+            return f"""display.scroll('{argument_string}')"""
 
     def ask(self, meta, args):
         var = args[0]
-        all_parameters = ["'" + process_characters_needing_escape(a) + "'" for a in args[1:]]
-        return f'{var} = input(' + '+'.join(all_parameters) + ")" + self.add_debug_breakpoint()
+        args_new = [self.make_print_ask_arg(a, meta, var) for a in args[1:]]
+        argument_string = ' '.join(args_new)
+        exception = self.make_index_error_check_if_list(args)
+        return exception + f"{var} = input(f'{argument_string}'){self.add_debug_breakpoint()}"
+
+    def make_print_ask_arg(self, arg, meta, var_to_escape=''):
+        # list access has been already rewritten since it occurs lower in the tree
+        # so when we encounter it as a child of print it will not be a subtree, but
+        # transpiled code (for example: random.choice(dieren))
+        # therefore we should not process it anymore and thread it as a variable:
+        # we set the line number to 100 so there is never an issue with variable access before
+        # assignment (regular code will not work since random.choice(dieren) is never defined as var as such)
+        if "random.choice" in arg or "[" in arg:
+            return self.process_variable_for_fstring(arg, meta.line, var_to_escape)
+
+        # this regex splits words from non-letter characters, such that name! becomes [name, !]
+        p = r"[·\p{Lu}\p{Ll}\p{Lt}\p{Lm}\p{Lo}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}]+|[^·\p{Lu}\p{Ll}\p{Lt}\p{Lm}\p{Lo}\p{Nl}]+"
+        res = regex.findall(p, arg)
+        return ''.join([self.process_variable_for_fstring(x, meta.line, var_to_escape) for x in res])
 
     def forward(self, meta, args):
         if len(args) == 0:
@@ -1856,13 +1867,12 @@ class ConvertToPython_2(ConvertToPython_1):
 
         note = args[0]
         if isinstance(note, str):
-            uppercase_note = note.upper()
-            if uppercase_note in list(notes_mapping.values()) + list(notes_mapping.keys()):  # this is a supported note
-                return self.make_play(uppercase_note, meta)
+            if present_in_notes_mapping(note):  # this is a supported note
+                return self.make_play(note.upper(), meta) + self.add_debug_breakpoint()
 
         # no note? it must be a variable!
         self.add_variable_access_location(note, meta.line)
-        return self.make_play_var(note, meta)
+        return self.make_play_var(note, meta) + self.add_debug_breakpoint()
 
     def assign(self, meta, args):
         variable_name = args[0]
@@ -1881,20 +1891,16 @@ class ConvertToPython_2(ConvertToPython_1):
                 return variable_name + " = '" + value + "'" + self.add_debug_breakpoint()
 
     def sleep(self, meta, args):
-
         if not args:
             return f"time.sleep(1){self.add_debug_breakpoint()}"
         else:
             value = f'"{args[0]}"' if self.is_int(args[0]) else args[0]
             if not self.is_int(args[0]):
                 self.add_variable_access_location(value, meta.line)
-            exceptions = self.make_index_error_check_if_list(args)
-            try_prefix = "try:\n" + textwrap.indent(exceptions, "  ")
-            exception_text = translate_value_error(Command.sleep, value, 'number')
-            code = try_prefix + textwrap.dedent(f"""\
-                  time.sleep(int({value})){self.add_debug_breakpoint()}
-                except ValueError:
-                  raise Exception({exception_text})""")
+            index_exception = self.make_index_error_check_if_list(args)
+            ex = make_value_error(Command.sleep, 'suggestion_number', self.language)
+            code = index_exception + \
+                textwrap.dedent(f"time.sleep(int_with_error({value}, {ex})){self.add_debug_breakpoint()}")
             return code
 
 
@@ -2006,7 +2012,8 @@ class ConvertToPython_4(ConvertToPython_3):
     def ask(self, meta, args):
         var = args[0]
         argument_string = self.print_ask_args(meta, args[1:])
-        return f"{var} = input(f'{argument_string}'){self.add_debug_breakpoint()}"
+        index_check = self.make_index_error_check_if_list(args)
+        return index_check + f"{var} = input(f'{argument_string}'){self.add_debug_breakpoint()}"
 
     def error_print_nq(self, meta, args):
         return ConvertToPython_2.print(self, meta, args)
@@ -2075,50 +2082,50 @@ else:{self.add_debug_breakpoint()}
         button_name = self.process_variable(args[0], meta.line)
         return f"""create_button({button_name})"""
 
-    def make_ifpressed_command(self, command, button=False, add_command_prefix=True):
-        if button:
-            command = f"""\
-  if event.type == pygame.USEREVENT:
-{ConvertToPython.indent(command, 4)}
-    # End of PyGame Event Handler"""
-        else:
-            command = f"""\
-  if event.type == pygame.KEYDOWN:
-{ConvertToPython.indent(command, 4)}
-    # End of PyGame Event Handler"""
+    def make_function_name(self, key_name):
+        return f"if_pressed_{key_name}_"
 
-        if add_command_prefix:
-            return UsesPyGame.command_prefix + "\n" + command
-        else:
-            return "\n" + command
+    def make_function(self, function_name, body):
+        return (
+            f'def {function_name}():' + '\n' +
+            ConvertToPython.indent(body)
+        )
 
-    def ifpressed_else(self, meta, args):
-        var_or_button = args[0]
-        if self.is_variable(var_or_button, meta.line):
-            return self.make_ifpressed_command(f"""\
-if event.key == {var_or_button}:
-{ConvertToPython.indent(args[1])}
-  break
-else:
-{ConvertToPython.indent(args[2])}
-  break""", button=False)
-        elif len(var_or_button) > 1:
-            button_name = self.process_variable(args[0], meta.line)
-            return self.make_ifpressed_command(f"""\
-if event.key == {button_name}:
-{ConvertToPython.indent(args[1])}
-  break
-else:
-{ConvertToPython.indent(args[2])}
-  break""", button=True)
-        else:
-            return self.make_ifpressed_command(f"""\
-if event.unicode == '{args[0]}':
-{ConvertToPython.indent(args[1])}
-  break
-else:
-{ConvertToPython.indent(args[2])}
-  break""", button=False)
+    def clear_key_mapping(self):
+        return 'if_pressed_mapping = {"else": "if_pressed_default_else"}'
+
+    def add_if_key_mapping(self, key, function_name):
+        return f"if_pressed_mapping['{key}'] = '{function_name}'"
+
+    def add_else_key_mapping(self, function_name):
+        return f"if_pressed_mapping['else'] = '{function_name}'"
+
+    def make_extension_call(self):
+        return 'extensions.if_pressed(if_pressed_mapping)'
+
+    def if_pressed_without_else(self, meta, args):
+        raise exceptions.MissingElseForPressitException(
+            command='if_pressed_else', level=self.level, line_number=meta.line
+        )
+
+    def if_pressed_else(self, meta, args):
+        self.process_variable(args[0], meta.line)
+        key = args[0]
+
+        if_code = args[1]
+        if_function_name = self.make_function_name(key)
+
+        else_code = args[2]
+        else_function_name = self.make_function_name('else')
+
+        return (
+            self.clear_key_mapping() + '\n' +
+            self.add_if_key_mapping(key, if_function_name) + '\n' +
+            self.add_else_key_mapping(else_function_name) + '\n' +
+            self.make_function(if_function_name, if_code) + '\n' +
+            self.make_function(else_function_name, else_code) + '\n' +
+            self.make_extension_call()
+        )
 
 
 @v_args(meta=True)
@@ -2151,13 +2158,9 @@ class ConvertToPython_6(ConvertToPython_5):
                 if not self.is_int(args[0]):
                     self.add_variable_access_location(value, meta.line)
 
-            exceptions = self.make_index_error_check_if_list(args)
-            try_prefix = "try:\n" + textwrap.indent(exceptions, "  ")
-            exception_text = translate_value_error(Command.sleep, value, 'number')
-            code = try_prefix + textwrap.dedent(f"""\
-                  time.sleep(int({value}))
-                except ValueError:
-                  raise Exception({exception_text})""")
+            index_exception = self.make_index_error_check_if_list(args)
+            ex = make_value_error(Command.sleep, 'suggestion_number', self.language)
+            code = index_exception + textwrap.dedent(f"time.sleep(int_with_error({value}, {ex}))")
             return code
 
     def print_ask_args(self, meta, args):
@@ -2218,7 +2221,7 @@ class ConvertToPython_6(ConvertToPython_5):
             latin_numeral = int(argument)
             return f'int({latin_numeral})'
         self.add_variable_access_location(argument, meta.line)
-        exception_text = translate_value_error(command, argument, 'number')
+        exception_text = make_value_error(command, 'suggestion_number', self.language)
         return f'int_with_error({argument}, {exception_text})'
 
     def process_calculation(self, args, operator, meta):
@@ -2295,8 +2298,8 @@ class ConvertToPython_7(ConvertToPython_6):
             body = "\n".join([self.indent(x) for x in args[1:]])
 
         body = add_sleep_to_command(body, indent=True, is_debug=self.is_debug, location="after")
-        type_check = self.code_to_ensure_variable_type(times, 'int', Command.repeat, 'number')
-        return f"{type_check}for {var_name} in range(int({times})):{self.add_debug_breakpoint()}\n{body}"
+        ex = make_value_error(Command.repeat, 'suggestion_number', self.language)
+        return f"for {var_name} in range(int_with_error({times}, {ex})):{self.add_debug_breakpoint()}\n{body}"
 
     def repeat(self, meta, args):
         return self.make_repeat(meta, args, multiline=False)
@@ -2319,63 +2322,40 @@ class ConvertToPython_8_9(ConvertToPython_7):
         all_lines = [ConvertToPython.indent(x) for x in args[1:]]
         return "if " + args[0] + ":" + self.add_debug_breakpoint() + "\n" + "\n".join(all_lines)
 
-    def ifpressed(self, meta, args):
+    def if_pressed(self, meta, args):
+        self.process_variable(args[0], meta.line)
         args = [a for a in args if a != ""]  # filter out in|dedent tokens
 
-        all_lines = '\n'.join([x for x in args[1:]])
-        all_lines = ConvertToPython.indent(all_lines)
-        var_or_key = args[0]
-        # if this is a variable, we assume it is a key (for now)
-        if self.is_variable(var_or_key, meta.line):
-            return self.make_ifpressed_command(f"""\
-if event.unicode == {args[0]}:
-{all_lines}
-  break""", button=False)
-        elif len(var_or_key) == 1:  # one character? also a key!
-            return self.make_ifpressed_command(f"""\
-if event.unicode == '{args[0]}':
-{all_lines}
-  break""", button=False)
-        else:  # otherwise we mean a button
-            button_name = self.process_variable(args[0], meta.line)
-            return self.make_ifpressed_command(f"""\
-if event.key == {button_name}:
-{all_lines}
-  break""", button=True)
+        key = args[0]
 
-    def ifpressed_else(self, met, args):
+        if_code = '\n'.join([x for x in args[1:]])
+        if_code = ConvertToPython.indent(if_code)
+        if_function_name = self.make_function_name(key)
+
+        return (
+            self.clear_key_mapping() + '\n' +
+            self.add_if_key_mapping(key, if_function_name) + '\n' +
+            self.make_function(if_function_name, if_code) + '\n'
+        )
+
+    def if_pressed_elses(self, met, args):
         args = [a for a in args if a != ""]  # filter out in|dedent tokens
+        else_code = '\n'.join([x for x in args[0:]])
+        else_code = ConvertToPython.indent(else_code)
+        else_function_name = self.make_function_name('else')
 
-        all_lines = '\n'.join([x for x in args[1:]])
-        all_lines = ConvertToPython.indent(all_lines)
+        return (
+            self.add_else_key_mapping(else_function_name) + '\n' +
+            self.make_function(else_function_name, else_code) + '\n' +
+            self.make_extension_call()
 
-        if (len(args[0]) > 1):
-            button_name = self.process_variable(args[0], met.line)
-            return self.make_ifpressed_command(f"""\
-if event.key == {button_name}:
-{all_lines}
-  break""", button=True)
-        else:
-            return self.make_ifpressed_command(f"""\
-if event.unicode == '{args[0]}':
-{all_lines}
-  break""", button=False)
+        )
 
     def elses(self, meta, args):
         args = [a for a in args if a != ""]  # filter out in|dedent tokens
         all_lines = [ConvertToPython.indent(x) for x in args]
 
         return "\nelse:\n" + "\n".join(all_lines)
-
-    def ifpressed_elses(self, meta, args):
-        args = [a for a in args if a != ""]  # filter out in|dedent tokens
-        args += ["  break"]
-
-        all_lines = "\n".join(
-            [ConvertToPython.indent(x, 4) for x in args]
-        )
-
-        return all_lines
 
     def var_access(self, meta, args):
         if len(args) == 1:  # accessing a var
@@ -2471,7 +2451,14 @@ class ConvertToPython_12(ConvertToPython_11):
     def returns(self, meta, args):
         argument_string = self.print_ask_args(meta, args)
         exception = self.make_index_error_check_if_list(args)
-        return exception + f"return f'''{argument_string}'''"
+        return exception + textwrap.dedent(f"""\
+            try:
+              return int(f'''{argument_string}''')
+            except ValueError:
+              try:
+                return float(f'''{argument_string}''')
+              except ValueError:
+                return f'''{argument_string}'''""")
 
     def number(self, meta, args):
         # try all ints? return ints
@@ -2494,7 +2481,7 @@ class ConvertToPython_12(ConvertToPython_11):
 
     def text_in_quotes(self, meta, args):
         # We need to re-add the quotes, so that the Python code becomes name = 'Jan' or "Jan's"
-        text = args[0]
+        text = args[0] if args else ''
         if "'" in text:
             return f'"{text}"'
         return f"'{text}'"
@@ -2517,17 +2504,16 @@ class ConvertToPython_12(ConvertToPython_11):
     def ask(self, meta, args):
         var = args[0]
         argument_string = self.print_ask_args(meta, args[1:])
-        assign = f"{var} = input(f'''{argument_string}''')" + self.add_debug_breakpoint()
-
-        return textwrap.dedent(f"""\
-        {assign}
-        try:
-          {var} = int({var})
-        except ValueError:
-          try:
-            {var} = float({var})
-          except ValueError:
-            pass""")  # no number? leave as string
+        exception = self.make_index_error_check_if_list(args)
+        return exception + textwrap.dedent(f"""\
+            {var} = input(f'''{argument_string}'''){self.add_debug_breakpoint()}
+            try:
+              {var} = int({var})
+            except ValueError:
+              try:
+                {var} = float({var})
+              except ValueError:
+                pass""")  # no number? leave as string
 
     def assign_list(self, meta, args):
         parameter = args[0]
@@ -2589,10 +2575,11 @@ class ConvertToPython_12(ConvertToPython_11):
         return self.make_forward(float(args[0]))
 
     def make_turn(self, parameter):
-        return self.make_turtle_command(parameter, Command.turn, 'right', False, 'float')
+        return self.make_turtle_command(parameter, Command.turn, 'right', False, HedyType.float)
 
     def make_forward(self, parameter):
-        return self.make_turtle_command(parameter, Command.forward, 'forward', True, 'float')
+        return self.make_turtle_command(parameter, Command.forward,
+                                        'forward', True, HedyType.float)
 
     def process_token_or_tree(self, argument, meta):
         if isinstance(argument, Tree):
@@ -2608,25 +2595,17 @@ class ConvertToPython_12(ConvertToPython_11):
         else:
             # this is a variable, add to the table
             self.add_variable_access_location(argument, meta.line)
-            exception_text = translate_value_error(command, argument, 'number')
+            exception_text = make_value_error(command, 'suggestion_number', self.language)
             return f'number_with_error({argument}, {exception_text})'
-
-    def process_token_or_tree_for_addition(self, argument, meta):
-        if type(argument) is Tree:
-            return f'{str(argument.children[0])}'
-        else:
-            # this is a variable, add to the table
-            self.add_variable_access_location(argument, meta.line)
-            return argument
 
     # From level 12 concatenation should also work, so the args could be either numbers or strings
     def addition(self, meta, args):
-        args = [self.process_token_or_tree_for_addition(a, meta) for a in args]
+        args = [self.process_token_or_tree(a, meta) for a in args]
         if all([self.is_int(a) or self.is_float(a) for a in args]):
             return Tree('sum', [f'{args[0]} + {args[1]}'])
         else:
-            exception_text = translate_values_error(Command.addition, 'numbers_or_strings')
-            return Tree('sum', [f'sum_with_error({args[0]}, {args[1]}, {exception_text})'])
+            ex_text = make_values_error(Command.addition, 'suggestion_numbers_or_strings', self.language)
+            return Tree('sum', [f'sum_with_error({args[0]}, {args[1]}, {ex_text})'])
 
     def division(self, meta, args):
         return self.process_calculation(args, '/', meta)
@@ -2690,28 +2669,28 @@ class ConvertToPython_15(ConvertToPython_14):
         exceptions = self.make_index_error_check_if_list([args[0]])
         return exceptions + "while " + args[0] + ":" + self.add_debug_breakpoint() + "\n" + body
 
-    def ifpressed(self, meta, args):
-        button_name = self.process_variable(args[0], meta.line)
-        var_or_button = args[0]
-        all_lines = [ConvertToPython.indent(x) for x in args[1:]]
-        body = "\n".join(all_lines)
+    def if_pressed_without_else(self, meta, args):
+        code = args[0]
 
-        # for now we assume a var is a letter, we can check this lateron by searching for a ... = button
-        if self.is_variable(var_or_button, meta.line):
-            return self.make_ifpressed_command(f"""\
-if event.unicode == {args[0]}:
-{body}
-  break""", button=False)
-        elif len(var_or_button) > 1:
-            return self.make_ifpressed_command(f"""\
-if event.key == {button_name}:
-{body}
-  break""", button=True)
-        else:
-            return self.make_ifpressed_command(f"""\
-if event.unicode == '{args[0]}':
-{body}
-  break""", button=False)
+        return (
+            code + self.make_extension_call()
+        )
+
+    def if_pressed(self, meta, args):
+        self.process_variable(args[0], meta.line)
+        args = [a for a in args if a != ""]  # filter out in|dedent tokens
+
+        key = args[0]
+
+        if_code = '\n'.join([x for x in args[1:]])
+        if_code = ConvertToPython.indent(if_code)
+        if_function_name = self.make_function_name(key)
+
+        return (
+            self.clear_key_mapping() + '\n' +
+            self.add_if_key_mapping(key, if_function_name) + '\n' +
+            self.make_function(if_function_name, if_code) + '\n'
+        )
 
 
 @v_args(meta=True)
@@ -2749,29 +2728,20 @@ class ConvertToPython_17(ConvertToPython_16):
         all_lines = [ConvertToPython.indent(x) for x in args[1:]]
         return "\nelif " + args[0] + ":" + self.add_debug_breakpoint() + "\n" + "\n".join(all_lines)
 
-    def ifpressed_elifs(self, meta, args):
+    def if_pressed_elifs(self, meta, args):
+        self.process_variable(args[0], meta.line)
         args = [a for a in args if a != ""]  # filter out in|dedent tokens
 
-        all_lines = '\n'.join([x for x in args[1:]])
-        all_lines = ConvertToPython.indent(all_lines)
-        var_or_key = args[0]
-        # if this is a variable, we assume it is a key (for now)
-        if self.is_variable(var_or_key, meta.line):
-            return self.make_ifpressed_command(f"""\
-if event.unicode == {args[0]}:
-{all_lines}
-  break""", button=False, add_command_prefix=False)
-        elif len(var_or_key) == 1:  # one character? also a key!
-            return self.make_ifpressed_command(f"""\
-if event.unicode == '{args[0]}':
-{all_lines}
-  break""", button=False, add_command_prefix=False)
-        else:  # otherwise we mean a button
-            button_name = self.process_variable(args[0], meta.line)
-            return self.make_ifpressed_command(f"""\
-if event.key == {button_name}:
-{all_lines}
-  break""", button=True, add_command_prefix=False)
+        key = args[0]
+
+        elif_code = '\n'.join([x for x in args[1:]])
+        elif_code = ConvertToPython.indent(elif_code)
+        elif_function_name = self.make_function_name(key)
+
+        return (
+            self.add_if_key_mapping(key, elif_function_name) + '\n' +
+            self.make_function(elif_function_name, elif_code) + '\n'
+        )
 
 
 @v_args(meta=True)
@@ -2794,129 +2764,6 @@ class ConvertToPython_18(ConvertToPython_17):
         return self.print(meta, args)
 
 
-def get_rule_from_string(s):
-    parts = s.split(':')
-    # get part before and after : (this is a join because there can be : in the rule)
-    if len(parts) <= 1:
-        return s, s
-    return parts[0], ''.join(parts[1])
-
-
-def merge_grammars(grammar_text_1, grammar_text_2):
-    # this function takes two grammar files and merges them into one
-    # rules that are redefined in the second file are overridden
-    # rules that are new in the second file are added (remaining_rules_grammar_2)
-    merged_grammar = []
-
-    deletables = []
-    # this list collects rules we no longer need,
-    # they will be removed when we encounter them
-
-    rules_grammar_1 = grammar_text_1.split('\n')
-    remaining_rules_grammar_2 = grammar_text_2.split('\n')
-    for line_1 in rules_grammar_1:
-        if line_1 == '' or line_1[0] == '/':  # skip comments and empty lines:
-            continue
-
-        name_1, definition_1 = get_rule_from_string(line_1)
-
-        rules_grammar_2 = grammar_text_2.split('\n')
-        override_found = False
-        for line_2 in rules_grammar_2:
-            if line_2 == '' or line_2[0] == '/':  # skip comments and empty lines:
-                continue
-
-            needs_preprocessing = re.match(r'((\w|_)+)<((\w|_)+)>', line_2)
-            if needs_preprocessing:
-                name_2 = f'{needs_preprocessing.group(1)}'
-                processor = needs_preprocessing.group(3)
-            else:
-                name_2, definition_2 = get_rule_from_string(line_2)
-
-            if name_1 == name_2:
-                override_found = True
-                if needs_preprocessing:
-                    definition_2 = PREPROCESS_RULES[processor](definition_1)
-                    line_2_processed = f'{name_2}: {definition_2}'
-                else:
-                    line_2_processed = line_2
-                if definition_1.strip() == definition_2.strip():
-                    warn_message = f"The rule {name_1} is duplicated: {definition_1} and {definition_2}. Please check!"
-                    warnings.warn(warn_message)
-                # Used to compute the rules that use the merge operators in the grammar, namely +=, -= and >>
-                new_rule, new_deletables = merge_rules_operator(definition_1, definition_2, name_1, line_2_processed)
-                if new_deletables:
-                    deletables += new_deletables
-                # Already processed, so remove it
-                remaining_rules_grammar_2.remove(line_2)
-                break
-
-        # new rule found? print that. nothing found? print org rule
-        if override_found:
-            merged_grammar.append(new_rule)
-        else:
-            merged_grammar.append(line_1)
-
-    # all rules that were not overlapping are new in the grammar, add these too
-    for rule in remaining_rules_grammar_2:
-        if not (rule == '' or rule[0] == '/'):
-            merged_grammar.append(rule)
-
-    merged_grammar = sorted(merged_grammar)
-    # filter deletable rules
-    rules_to_keep = [rule for rule in merged_grammar if get_rule_from_string(rule)[0] not in deletables]
-    return '\n'.join(rules_to_keep)
-
-
-ADD_GRAMMAR_MERGE_OP = '+='
-REMOVE_GRAMMAR_MERGE_OP = '-='
-LAST_GRAMMAR_MERGE_OP = '>>'
-GRAMMAR_MERGE_OPERATORS = [ADD_GRAMMAR_MERGE_OP, REMOVE_GRAMMAR_MERGE_OP, LAST_GRAMMAR_MERGE_OP]
-
-
-def merge_rules_operator(prev_definition, new_definition, name, complete_line):
-    op_to_arg = get_operator_to_argument(new_definition)
-
-    add_arg = op_to_arg.get(ADD_GRAMMAR_MERGE_OP, '')
-    remove_arg = op_to_arg.get(REMOVE_GRAMMAR_MERGE_OP, '')
-    last_arg = op_to_arg.get(LAST_GRAMMAR_MERGE_OP, '')
-    remaining_commands = get_remaining_rules(prev_definition, remove_arg, last_arg)
-    ordered_commands = split_rule(remaining_commands, add_arg, last_arg)
-
-    new_rule = f"{name}: {' | '.join(ordered_commands)}" if bool(op_to_arg) else complete_line
-    deletable = split_rule(remove_arg)
-    return new_rule, deletable
-
-
-def get_operator_to_argument(definition):
-    # Creates a map of all used operators and their respective arguments e.g. {'+=': 'print | play', '>>': 'echo'}
-    operator_to_index = [(op, definition.find(op)) for op in GRAMMAR_MERGE_OPERATORS if op in definition]
-    result = {}
-    for i, (op, index) in enumerate(operator_to_index):
-        start_index = index + len(op)
-        if i + 1 < len(operator_to_index):
-            _, next_index = operator_to_index[i + 1]
-            result[op] = definition[start_index:next_index].strip()
-        else:
-            result[op] = definition[start_index:].strip()
-    return result
-
-
-def get_remaining_rules(orig_def, *sub_def):
-    original_commands = split_rule(orig_def)
-    commands_after_minus = split_rule(*sub_def)
-    misses = [c for c in commands_after_minus if c not in original_commands]
-    if misses:
-        raise Exception(f"Command(s) {'|'.join(misses)} do not exist in the previous definition")
-    remaining_commands = [cmd for cmd in original_commands if cmd not in commands_after_minus]
-    remaining_commands = ' | '.join(remaining_commands)  # turn the result list into a string
-    return remaining_commands
-
-
-def split_rule(*rules):
-    return [c.strip() for rule in rules for c in rule.split('|') if c.strip() != '']
-
-
 # this is only a couple of MB in total, safe to cache
 @cache
 def create_grammar(level, lang, skip_faulty):
@@ -2926,7 +2773,7 @@ def create_grammar(level, lang, skip_faulty):
     # then keep merging new grammars in
     for i in range(2, level + 1):
         grammar_text_i = get_additional_rules_for_level(i)
-        merged_grammars = merge_grammars(merged_grammars, grammar_text_i)
+        merged_grammars = hedy_grammar.merge_grammars(merged_grammars, grammar_text_i)
 
     # keyword and other terminals never have mergable rules, so we can just add them at the end
     keywords = get_keywords_for_language(lang)
@@ -3160,7 +3007,7 @@ def get_parser(level, lang="en", keep_all_tokens=False, skip_faulty=False):
 
 
 ParseResult = namedtuple('ParseResult', ['code', 'source_map', 'has_turtle',
-                                         'has_pygame', 'has_clear', 'has_music', 'commands'])
+                                         'has_pressed', 'has_clear', 'has_music', 'commands'])
 
 
 def transpile_inner_with_skipping_faulty(input_string, level, lang="en", unused_allowed=True):
@@ -3339,39 +3186,33 @@ def preprocess_blocks(code, level, lang):
             indent_size = leading_spaces
             indent_size_adapted = True
 
-        # indentation size not 4
+        # there is inconsistent indentation, not sure if that is too much or too little!
         if (leading_spaces % indent_size) != 0:
-            # there is inconsistent indentation, not sure if that is too much or too little!
+            fixed_code = program_repair.fix_indent(code, line_number, leading_spaces, indent_size)
             if leading_spaces < current_number_of_indents * indent_size:
-                fixed_code = program_repair.fix_indent(code, line_number, leading_spaces, indent_size)
-                raise hedy.exceptions.NoIndentationException(line_number=line_number, leading_spaces=leading_spaces,
-                                                             indent_size=indent_size, fixed_code=fixed_code)
+                raise_too_few_indents_error(line_number, leading_spaces, indent_size, fixed_code, level)
             else:
-                fixed_code = program_repair.fix_indent(code, line_number, leading_spaces, indent_size)
-                raise hedy.exceptions.IndentationException(line_number=line_number, leading_spaces=leading_spaces,
-                                                           indent_size=indent_size, fixed_code=fixed_code)
+                raise_too_many_indents_error(line_number, leading_spaces, indent_size, fixed_code, level)
 
-        # happy path, multiple of 4 spaces:
+        # happy path, indentation is consistent, i.e. multiple of 2 or 4:
         current_number_of_indents = leading_spaces // indent_size
         if current_number_of_indents > 1 and level == hedy.LEVEL_STARTING_INDENTATION:
-            raise hedy.exceptions.LockedLanguageFeatureException(concept="nested blocks")
+            raise hedy.exceptions.TooManyIndentsStartLevelException(line_number=line_number,
+                                                                    leading_spaces=leading_spaces)
 
         if current_number_of_indents > previous_number_of_indents and not next_line_needs_indentation:
             # we are indenting, but this line is not following* one that even needs indenting, raise
             # * note that we have not yet updated the value of 'next line needs indenting' so if refers to this line!
             fixed_code = program_repair.fix_indent(code, line_number, leading_spaces, indent_size)
-            raise hedy.exceptions.IndentationException(line_number=line_number, leading_spaces=leading_spaces,
-                                                       indent_size=indent_size, fixed_code=fixed_code)
+            raise_too_many_indents_error(line_number, leading_spaces, indent_size, fixed_code, level)
 
         if next_line_needs_indentation and current_number_of_indents <= previous_number_of_indents:
             fixed_code = program_repair.fix_indent(code, line_number, leading_spaces, indent_size)
-            raise hedy.exceptions.NoIndentationException(line_number=line_number, leading_spaces=leading_spaces,
-                                                         indent_size=indent_size, fixed_code=fixed_code)
+            raise_too_few_indents_error(line_number, leading_spaces, indent_size, fixed_code, level)
 
         if current_number_of_indents - previous_number_of_indents > 1:
             fixed_code = program_repair.fix_indent(code, line_number, leading_spaces, indent_size)
-            raise hedy.exceptions.IndentationException(line_number=line_number, leading_spaces=leading_spaces,
-                                                       indent_size=indent_size, fixed_code=fixed_code)
+            raise_too_many_indents_error(line_number, leading_spaces, indent_size, fixed_code, level)
 
         if current_number_of_indents < previous_number_of_indents:
             # we are dedenting ('jumping back) so we need to and an end-block
@@ -3397,6 +3238,24 @@ def preprocess_blocks(code, level, lang):
     for i in range(current_number_of_indents):
         processed_code[-1] += '#ENDBLOCK'
     return "\n".join(processed_code)
+
+
+def raise_too_many_indents_error(line_number, leading_spaces, indent_size, fixed_code, level):
+    if level == hedy.LEVEL_STARTING_INDENTATION:
+        raise hedy.exceptions.TooManyIndentsStartLevelException(line_number=line_number, leading_spaces=leading_spaces,
+                                                                fixed_code=fixed_code)
+    else:
+        raise hedy.exceptions.IndentationException(line_number=line_number, leading_spaces=leading_spaces,
+                                                   indent_size=indent_size, fixed_code=fixed_code)
+
+
+def raise_too_few_indents_error(line_number, leading_spaces, indent_size, fixed_code, level):
+    if level == hedy.LEVEL_STARTING_INDENTATION:
+        raise hedy.exceptions.TooFewIndentsStartLevelException(line_number=line_number, leading_spaces=leading_spaces,
+                                                               fixed_code=fixed_code)
+    else:
+        raise hedy.exceptions.NoIndentationException(line_number=line_number, leading_spaces=leading_spaces,
+                                                     indent_size=indent_size, fixed_code=fixed_code)
 
 
 def preprocess_ifs(code, lang='en'):
@@ -3670,10 +3529,10 @@ def transpile_inner(input_string, level, lang="en", populate_source_map=False, i
 
         has_clear = "clear" in commands
         has_turtle = "forward" in commands or "turn" in commands or "color" in commands
-        has_pygame = "ifpressed" in commands or "ifpressed_else" in commands or "assign_button" in commands
+        has_pressed = "if_pressed" in commands or "if_pressed_else" in commands or "assign_button" in commands
         has_music = "play" in commands
 
-        parse_result = ParseResult(python, source_map, has_turtle, has_pygame, has_clear, has_music, commands)
+        parse_result = ParseResult(python, source_map, has_turtle, has_pressed, has_clear, has_music, commands)
 
         if populate_source_map:
             source_map.set_python_output(python)
@@ -3681,6 +3540,7 @@ def transpile_inner(input_string, level, lang="en", populate_source_map=False, i
         if not unused_allowed:
             for x in lookup_table:
                 if isinstance(x.name, str) and x.access_line is None and x.name != 'x__x__x__x':
+                    x.name = re.sub(r'^_', '', x.name)
                     raise hedy.exceptions.UnusedVariableException(
                         level, x.definition_line, x.name, fixed_code=python, fixed_result=parse_result)
 
