@@ -1095,10 +1095,9 @@ export function runPythonProgram(this: any, code: string, sourceMap: any, hasTur
       if (hasTurtle) {
         $('#saveFilesContainer').show();
       }
-
       // Check if the program was correct but the output window is empty: Return a warning
-      if ((!hasClear) && $('#output').is(':empty') && $('#turtlecanvas').is(':empty')) {
-        pushAchievement("error_or_empty");
+      if ((!hasClear) && $('#output').is(':empty') && $('#turtlecanvas').is(':empty') && !hasMusic) {
+          pushAchievement("error_or_empty");
         error.showWarning(ClientMessages['Transpile_warning'], ClientMessages['Empty_output']);
         return;
       }
